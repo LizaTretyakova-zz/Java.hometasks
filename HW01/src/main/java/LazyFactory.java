@@ -1,58 +1,90 @@
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Supplier;
 
 public class LazyFactory {
-    public static <T> Lazy<T> createLazyOneThread(final Supplier<T> supplier) {
-        return new Lazy<T>() {
-            private boolean executed = false;// is needed here since supplier can return null
-            private T result;
 
-            public T get() {
-                if(!executed) {
-                    result = supplier.get();
-                    executed = true;
-                }
-                return result;
-            }
-        };
-    }
+    public static final Object NONE = new Object();
 
-    public static <T> Lazy<T> createLazyMultithread(final Supplier<T> supplier) {
-        return new Lazy<T>() {
-            private boolean executed = false;// is needed here since supplier can return null
-            private T result;// could be volatile, but not essentially
+    public static class LazyOneThread<T> implements Lazy<T> {
+        private T result;
+        private Supplier<T> supplier;
 
-            public T get() {
-                synchronized(this) {
-                    if(!executed) {
-                        synchronized (this) {
-                            if(!executed) {
-                                result = supplier.get();
-                                executed = true;
-                            }
-                        }
-                    }
-                    return result;
-                }
-            }
-        };
-    }
-
-    public static <T> Lazy<T> createLazyLockfree(final Supplier<T> supplier) {
-        class LazyLockfree<T> implements Lazy {
-
-            private volatile T result = null;
-            //cannot be placed outside becuase of T
-            private AtomicReferenceFieldUpdater<LazyLockfree, Object> resultUpdater =
-                    AtomicReferenceFieldUpdater.newUpdater(LazyLockfree.class, Object.class, "result");
-
-            public T get() {
-                resultUpdater.compareAndSet(this, null, supplier.get());
-                return result;
-            }
+        public LazyOneThread(Supplier<T> s) {
+            supplier = s;
+            result = (T)NONE;
         }
 
-        return new LazyLockfree<T>();
+        @Override
+        public T get() {
+            if(result == NONE) {
+                result = supplier.get();
+                supplier = null;
+            }
+            return result;
+        }
     }
 
+
+    public static <T> Lazy<T> createLazyOneThread(Supplier<T> supplier) {
+        return new LazyOneThread<T>(supplier);
+    }
+
+    public static class LazyMultithread<T> implements Lazy<T> {
+
+        private volatile T result;
+        private Supplier<T> supplier;
+
+        public LazyMultithread (Supplier<T> s) {
+            supplier = s;
+            result = (T)NONE;
+        }
+
+        @Override
+        public T get() {
+            if(result == NONE) {
+                    synchronized (this) {
+                        if(result == NONE) {
+                            result = supplier.get();
+                            supplier = null;
+                        }
+                    }
+                }
+            return result;
+        }
+    }
+
+    public static <T> Lazy<T> createLazyMultithread(Supplier<T> supplier) {
+        return new LazyMultithread<T>(supplier);
+    }
+
+    public static class LazyLockfree<T> implements Lazy<T> {
+
+        private static final AtomicReferenceFieldUpdater<LazyLockfree, Object> updater =
+                AtomicReferenceFieldUpdater.newUpdater(LazyLockfree.class, Object.class, "result");
+        private volatile T result;
+        private Supplier<T> supplier;
+
+        public LazyLockfree(Supplier<T> s) {
+            supplier = s;
+            result = (T)NONE;
+        }
+
+        @Override
+        public T get() {
+            if(result == NONE) {
+                Supplier<T> local = supplier;
+                if(local != null) {
+                    if(updater.compareAndSet(this, NONE, local.get())) {
+                        supplier = null;
+                    }
+                }
+            }
+            return result;
+        }
+    }
+
+    public static <T> Lazy<T> createLazyLockfree(Supplier<T> supplier) {
+        return new LazyLockfree<>(supplier);
+    }
 }
